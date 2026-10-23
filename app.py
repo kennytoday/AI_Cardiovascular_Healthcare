@@ -1,14 +1,20 @@
 """
-AI Cardio Health Risk Checker
---------------------------------
-Two modes:
-1. Basic Mode  – Everyday inputs + official Framingham 10-year CVD risk
-2. Advanced Mode – Full clinical features + Random Forest AI model
+AI Cardio Health Risk Checker (Improved)
+----------------------------------------
+Improvements added:
+- Personalized recommendations
+- Risk vs average comparison
+- Input validation warnings
+- Lifestyle score
+- What-if mode (quit smoking)
+- Downloadable result summary
+- Cleaner layout
 """
 
 import json
 import sys
 from pathlib import Path
+from datetime import datetime
 
 import joblib
 import numpy as np
@@ -16,15 +22,16 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-# Make src importable
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from framingham import framingham_10y_risk, risk_interpretation  # noqa: E402
+from framingham import (
+    framingham_10y_risk,
+    risk_interpretation,
+    get_average_risk,
+    calculate_lifestyle_score,
+)
 
-# ──────────────────────────────────────────────
-# Page config
-# ──────────────────────────────────────────────
 st.set_page_config(
     page_title="AI Cardio Health Risk Checker",
     page_icon="❤️",
@@ -32,9 +39,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ──────────────────────────────────────────────
-# Load AI model
-# ──────────────────────────────────────────────
 MODEL_PATH = ROOT / "models" / "heart_disease_model.pkl"
 FEATURES_PATH = ROOT / "models" / "feature_names.json"
 
@@ -49,9 +53,6 @@ def load_ai_model():
 
 ai_model, feature_names = load_ai_model()
 
-# ──────────────────────────────────────────────
-# Helpers
-# ──────────────────────────────────────────────
 FEATURE_HELP = {
     "age": "Age in years",
     "sex": "Biological sex",
@@ -137,87 +138,101 @@ def get_ai_risk_level(prob: float):
     return "High", "#dc3545", "🔴"
 
 
-def basic_recommendations(risk_pct: float, smoker: bool, diabetes: bool, sbp: float, chol: float, hdl: float):
+def get_input_warnings(age, sbp, chol, hdl, smoker, diabetes):
+    warnings = []
+    if sbp >= 180:
+        warnings.append("⚠️ Very high blood pressure — seek medical advice soon.")
+    elif sbp >= 140:
+        warnings.append("⚠️ Blood pressure is elevated.")
+    if chol >= 300:
+        warnings.append("⚠️ Very high cholesterol — discuss with a doctor.")
+    elif chol >= 240:
+        warnings.append("⚠️ High cholesterol.")
+    if hdl < 35:
+        warnings.append("⚠️ Very low HDL (good cholesterol).")
+    if smoker:
+        warnings.append("⚠️ Smoking significantly increases heart risk.")
+    if diabetes:
+        warnings.append("⚠️ Diabetes is an important risk factor.")
+    if age >= 70:
+        warnings.append("ℹ️ Age is a strong risk factor — regular check-ups are important.")
+    return warnings
+
+
+def basic_recommendations(risk_pct, smoker, diabetes, sbp, chol, hdl, lifestyle_score):
     recs = []
     if risk_pct >= 20:
-        recs.append("🔴 **High 10-year risk.** Schedule a visit with your doctor soon to discuss prevention strategies (lifestyle ± medication).")
+        recs.append("🔴 **High 10-year risk.** Schedule a visit with your doctor soon to discuss prevention strategies.")
     elif risk_pct >= 10:
-        recs.append("🟡 **Intermediate risk.** Focus on lifestyle changes and talk to your clinician about whether further testing or therapy is appropriate.")
+        recs.append("🟡 **Intermediate risk.** Focus on lifestyle changes and talk to your clinician.")
     else:
         recs.append("🟢 **Lower risk.** Keep up the healthy habits and continue regular check-ups.")
 
     if smoker:
-        recs.append("• **Quit smoking** – the single most powerful change you can make for heart health.")
+        recs.append("• **Quit smoking** — this is the single most powerful change you can make.")
     if diabetes:
         recs.append("• Optimize blood sugar control and maintain a healthy weight.")
     if sbp >= 140:
-        recs.append("• Blood pressure is elevated. Reduce salt, increase activity, manage stress, and follow medical advice.")
+        recs.append("• Blood pressure is elevated. Reduce salt, increase activity, and follow medical advice.")
     if chol >= 240 or hdl < 40:
-        recs.append("• Improve cholesterol profile: more fiber, less saturated fat, regular exercise. Discuss with your doctor.")
+        recs.append("• Improve cholesterol: more fiber, less saturated fat, regular exercise.")
+
+    if lifestyle_score < 60:
+        recs.append("• Your lifestyle score is low — small changes can make a big difference.")
+    elif lifestyle_score >= 80:
+        recs.append("• Great lifestyle score! Keep doing what you're doing.")
 
     recs.append("• Aim for 150 minutes of moderate aerobic activity per week.")
-    recs.append("• Eat a diet rich in vegetables, fruits, whole grains, and healthy fats (Mediterranean style is excellent).")
+    recs.append("• Eat a Mediterranean-style diet (vegetables, fruits, whole grains, healthy fats).")
     recs.append("• Maintain a healthy weight, limit alcohol, manage stress, and get good sleep.")
-    recs.append("• This calculator is for education only. Final decisions belong to you and your healthcare team.")
+    recs.append("• This tool is for education only. Always consult a healthcare professional.")
     return recs
 
 
-def ai_recommendations(prob: float, inputs: dict):
-    recs = []
-    if prob >= 0.6:
-        recs.append("🔴 **Higher probability indicated by the AI model.** Please consult a cardiologist or primary care physician for proper evaluation.")
-    elif prob >= 0.3:
-        recs.append("🟡 **Moderate probability.** Discuss results with your doctor and consider lifestyle optimization.")
-    else:
-        recs.append("🟢 **Lower probability according to the model.** Continue healthy habits and regular check-ups.")
-
-    if inputs.get("trestbps", 0) >= 140:
-        recs.append("• Elevated resting blood pressure noted.")
-    if inputs.get("chol", 0) >= 240:
-        recs.append("• Cholesterol is high – dietary changes and medical review recommended.")
-    if inputs.get("exang", 0) == 1:
-        recs.append("• Exercise-induced angina reported – seek medical advice before intense exercise.")
-    recs.append("• General: quit smoking if applicable, regular exercise, heart-healthy diet, healthy weight, stress management.")
-    recs.append("• Remember: this AI model is trained on a research dataset and is **not** a clinical diagnostic tool.")
-    return recs
+def generate_summary_text(result_data: dict) -> str:
+    lines = [
+        "AI Cardio Health Risk Checker - Result Summary",
+        f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+        "",
+        f"10-Year CVD Risk: {result_data.get('risk_pct', 'N/A')}%",
+        f"Category: {result_data.get('category', 'N/A')}",
+        f"Average risk for age/sex: ~{result_data.get('avg_risk', 'N/A')}%",
+        f"Lifestyle Score: {result_data.get('lifestyle', 'N/A')}/100",
+        "",
+        "Recommendations:",
+    ]
+    for rec in result_data.get("recs", []):
+        clean = rec.replace("**", "").replace("• ", "- ")
+        lines.append(clean)
+    lines.append("")
+    lines.append("Disclaimer: Educational tool only. Not medical advice.")
+    return "\n".join(lines)
 
 
 # ──────────────────────────────────────────────
 # UI
 # ──────────────────────────────────────────────
 st.title("❤️ AI Cardio Health Risk Checker")
-st.caption("Educational tool combining classic Framingham risk equations + modern machine learning")
+st.caption("Educational tool • Framingham equations + AI model • Not for clinical use")
 
-# Strong disclaimer
 st.error(
     """
     ⚠️ **IMPORTANT MEDICAL DISCLAIMER**  
     This is **NOT** a medical device and does **NOT** provide medical advice, diagnosis, or treatment.  
-    Results are for **educational / demonstration purposes only**.  
-    Always consult a qualified healthcare professional for any health concerns.  
-    Do not make medical decisions based solely on this tool.
+    Results are for **educational purposes only**. Always consult a qualified healthcare professional.
     """
 )
 
-# Mode selector
 mode = st.radio(
     "Choose Mode",
-    ["🟢 Basic Mode (Framingham 10-year Risk)", "🤖 Advanced Mode (AI Model)"],
+    ["🟢 Basic Mode (Framingham)", "🤖 Advanced Mode (AI Model)", "📊 Both"],
     horizontal=True,
-    help="Basic Mode uses everyday numbers most people know. Advanced Mode uses the full AI model that needs more clinical data.",
 )
 
 st.markdown("---")
 
-# ══════════════════════════════════════════════
-# BASIC MODE
-# ══════════════════════════════════════════════
-if mode.startswith("🟢"):
+if mode.startswith("🟢") or mode.startswith("📊"):
     st.subheader("Basic Mode – Framingham 10-year CVD Risk")
-    st.markdown(
-        "Uses the official **2008 Framingham Heart Study** equations (laboratory version). "
-        "These are widely used clinical risk equations based on large population data."
-    )
 
     col1, col2, col3 = st.columns(3)
 
@@ -234,7 +249,7 @@ if mode.startswith("🟢"):
     with col3:
         diabetes = st.selectbox("Diabetes", ["No", "Yes"]) == "Yes"
         bp_treated = st.selectbox("On blood pressure medication?", ["No", "Yes"]) == "Yes"
-        st.write("")  # spacer
+        what_if = st.checkbox("What if I quit smoking?", value=False, disabled=not smoker)
         calculate_basic = st.button("🔍 Calculate 10-year Risk", type="primary", use_container_width=True)
 
     if calculate_basic:
@@ -253,6 +268,22 @@ if mode.startswith("🟢"):
         category = result["risk_category"]
         color = result["color"]
         emoji = result["emoji"]
+        avg_risk = get_average_risk(age, sex)
+        lifestyle = calculate_lifestyle_score(smoker, diabetes, sbp, total_chol, hdl, bp_treated)
+
+        # What-if calculation
+        what_if_risk = None
+        if what_if and smoker:
+            what_if_result = framingham_10y_risk(
+                age=age, sex=sex.lower(), total_chol=total_chol, hdl=hdl,
+                sbp=sbp, smoker=False, diabetes=diabetes, bp_treated=bp_treated,
+            )
+            what_if_risk = what_if_result["risk_percent"]
+
+        warnings = get_input_warnings(age, sbp, total_chol, hdl, smoker, diabetes)
+        if warnings:
+            for w in warnings:
+                st.warning(w)
 
         st.markdown("---")
         c1, c2 = st.columns([1, 1])
@@ -268,93 +299,72 @@ if mode.startswith("🟢"):
                     <p style="margin:0.3rem 0 0 0; opacity:0.85;">
                         {risk_interpretation(risk_pct)}
                     </p>
+                    <p style="margin:0.5rem 0 0 0;"><strong>Average for your age/sex:</strong> ~{avg_risk}%</p>
+                    <p style="margin:0.2rem 0 0 0;"><strong>Lifestyle Score:</strong> {lifestyle}/100</p>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
+            if what_if_risk is not None:
+                st.success(f"**What-if (quit smoking):** Risk drops to **{what_if_risk}%**")
             st.plotly_chart(create_gauge(risk_pct, "10-Year CVD Risk (%)"), use_container_width=True)
 
         with c2:
             st.subheader("Recommendations")
-            for rec in basic_recommendations(risk_pct, smoker, diabetes, sbp, total_chol, hdl):
+            recs = basic_recommendations(risk_pct, smoker, diabetes, sbp, total_chol, hdl, lifestyle)
+            for rec in recs:
                 st.markdown(rec)
+
+            # Download summary
+            summary_data = {
+                "risk_pct": risk_pct,
+                "category": category,
+                "avg_risk": avg_risk,
+                "lifestyle": lifestyle,
+                "recs": recs,
+            }
+            summary_text = generate_summary_text(summary_data)
+            st.download_button(
+                label="📥 Download Result Summary",
+                data=summary_text,
+                file_name="cardio_risk_summary.txt",
+                mime="text/plain",
+            )
 
         with st.expander("Technical details (Framingham equation)"):
             st.json(result["details"])
-            st.caption("Based on D’Agostino et al., Circulation 2008. Educational implementation only.")
 
-    else:
-        st.info("Fill in the values above and click **Calculate 10-year Risk**.")
-
-# ══════════════════════════════════════════════
-# ADVANCED MODE (AI)
-# ══════════════════════════════════════════════
-else:
+if mode.startswith("🤖") or mode.startswith("📊"):
+    if mode.startswith("📊"):
+        st.markdown("---")
     st.subheader("Advanced Mode – AI (Random Forest) Prediction")
-    st.markdown(
-        "Uses a machine-learning model trained on the classic UCI Heart Disease dataset. "
-        "Many features require medical tests (ECG, stress test, fluoroscopy)."
-    )
 
     with st.sidebar:
-        st.header("Clinical Inputs")
-        st.caption("Adjust values then click Calculate")
-
-        age = st.slider("Age", 29, 77, 55, help=FEATURE_HELP["age"])
-        sex = st.selectbox("Sex", [0, 1], format_func=lambda x: "Female" if x == 0 else "Male", index=1)
-
-        trestbps = st.number_input("Resting BP (mm Hg)", 80, 200, 130)
-        chol = st.number_input("Cholesterol (mg/dl)", 100, 600, 240)
-        fbs = st.selectbox("Fasting BS > 120", [0, 1], format_func=lambda x: "Yes" if x else "No")
-        thalach = st.slider("Max Heart Rate", 70, 220, 150)
-
-        cp = st.selectbox(
-            "Chest Pain Type",
-            [0, 1, 2, 3],
-            format_func=lambda x: {0: "Typical Angina", 1: "Atypical Angina", 2: "Non-anginal", 3: "Asymptomatic"}[x],
-        )
-        restecg = st.selectbox(
-            "Resting ECG",
-            [0, 1, 2],
-            format_func=lambda x: {0: "Normal", 1: "ST-T Abnormality", 2: "LV Hypertrophy"}[x],
-        )
-        exang = st.selectbox("Exercise Angina", [0, 1], format_func=lambda x: "Yes" if x else "No")
-        oldpeak = st.slider("ST Depression (oldpeak)", 0.0, 6.5, 1.0, 0.1)
-        slope = st.selectbox(
-            "ST Slope",
-            [0, 1, 2],
-            format_func=lambda x: {0: "Upsloping", 1: "Flat", 2: "Downsloping"}[x],
-        )
-        ca = st.selectbox("Major Vessels (0-3)", [0, 1, 2, 3, 4], index=0)
-        thal = st.selectbox(
-            "Thalassemia",
-            [1, 2, 3],
-            format_func=lambda x: {1: "Normal", 2: "Fixed Defect", 3: "Reversible Defect"}[x],
-            index=1,
-        )
-
+        st.header("Clinical Inputs (AI Mode)")
+        age_ai = st.slider("Age", 29, 77, 55, key="ai_age")
+        sex_ai = st.selectbox("Sex", [0, 1], format_func=lambda x: "Female" if x == 0 else "Male", index=1, key="ai_sex")
+        trestbps = st.number_input("Resting BP (mm Hg)", 80, 200, 130, key="ai_bp")
+        chol = st.number_input("Cholesterol (mg/dl)", 100, 600, 240, key="ai_chol")
+        fbs = st.selectbox("Fasting BS > 120", [0, 1], format_func=lambda x: "Yes" if x else "No", key="ai_fbs")
+        thalach = st.slider("Max Heart Rate", 70, 220, 150, key="ai_hr")
+        cp = st.selectbox("Chest Pain Type", [0, 1, 2, 3], format_func=lambda x: {0: "Typical Angina", 1: "Atypical Angina", 2: "Non-anginal", 3: "Asymptomatic"}[x], key="ai_cp")
+        restecg = st.selectbox("Resting ECG", [0, 1, 2], format_func=lambda x: {0: "Normal", 1: "ST-T Abnormality", 2: "LV Hypertrophy"}[x], key="ai_ecg")
+        exang = st.selectbox("Exercise Angina", [0, 1], format_func=lambda x: "Yes" if x else "No", key="ai_exang")
+        oldpeak = st.slider("ST Depression (oldpeak)", 0.0, 6.5, 1.0, 0.1, key="ai_oldpeak")
+        slope = st.selectbox("ST Slope", [0, 1, 2], format_func=lambda x: {0: "Upsloping", 1: "Flat", 2: "Downsloping"}[x], key="ai_slope")
+        ca = st.selectbox("Major Vessels (0-3)", [0, 1, 2, 3, 4], index=0, key="ai_ca")
+        thal = st.selectbox("Thalassemia", [1, 2, 3], format_func=lambda x: {1: "Normal", 2: "Fixed Defect", 3: "Reversible Defect"}[x], index=1, key="ai_thal")
         calculate_ai = st.button("🔍 Calculate AI Risk", type="primary", use_container_width=True)
 
     if calculate_ai:
         input_dict = {
-            "age": age,
-            "sex": sex,
-            "cp": cp,
-            "trestbps": trestbps,
-            "chol": chol,
-            "fbs": fbs,
-            "restecg": restecg,
-            "thalach": thalach,
-            "exang": exang,
-            "oldpeak": oldpeak,
-            "slope": slope,
-            "ca": ca,
-            "thal": thal,
+            "age": age_ai, "sex": sex_ai, "cp": cp, "trestbps": trestbps,
+            "chol": chol, "fbs": fbs, "restecg": restecg, "thalach": thalach,
+            "exang": exang, "oldpeak": oldpeak, "slope": slope, "ca": ca, "thal": thal,
         }
         X = pd.DataFrame([input_dict])[feature_names]
         prob = float(ai_model.predict_proba(X)[0][1])
         pred = int(ai_model.predict(X)[0])
-
         label, color, emoji = get_ai_risk_level(prob)
 
         c1, c2 = st.columns([1, 1])
@@ -366,9 +376,6 @@ else:
                     <p style="font-size:1.4rem; margin:0.4rem 0 0 0;">
                         AI probability: <strong>{prob*100:.1f}%</strong>
                     </p>
-                    <p style="margin:0.2rem 0 0 0; opacity:0.8;">
-                        Model class: {"Disease indicators present" if pred == 1 else "No disease indicators"}
-                    </p>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -376,35 +383,20 @@ else:
             st.plotly_chart(create_ai_gauge(prob), use_container_width=True)
 
         with c2:
-            st.subheader("Recommendations")
-            for rec in ai_recommendations(prob, input_dict):
-                st.markdown(rec)
+            st.subheader("AI Recommendations")
+            if prob >= 0.6:
+                st.markdown("🔴 **Higher probability.** Please consult a doctor for proper evaluation.")
+            elif prob >= 0.3:
+                st.markdown("🟡 **Moderate probability.** Discuss with your doctor and optimize lifestyle.")
+            else:
+                st.markdown("🟢 **Lower probability.** Continue healthy habits.")
+            st.markdown("• This AI model is trained on research data and is **not** a diagnostic tool.")
 
-        st.subheader("Global Feature Importance (AI Model)")
-        imp = pd.DataFrame(
-            {"Feature": feature_names, "Importance": ai_model.feature_importances_}
-        ).sort_values("Importance")
+        st.subheader("Feature Importance")
+        imp = pd.DataFrame({"Feature": feature_names, "Importance": ai_model.feature_importances_}).sort_values("Importance")
         fig = go.Figure(go.Bar(x=imp["Importance"], y=imp["Feature"], orientation="h", marker_color="steelblue"))
         fig.update_layout(height=380, margin=dict(l=10, r=10, t=20, b=10))
         st.plotly_chart(fig, use_container_width=True)
 
-        with st.expander("Input values used"):
-            st.json(input_dict)
-    else:
-        st.info("👈 Adjust the clinical features in the sidebar and click **Calculate AI Risk**.")
-        st.markdown(
-            """
-            **About the AI model**
-            - Algorithm: Random Forest (200 trees)
-            - Dataset: UCI Heart Disease – Cleveland (303 patients)
-            - Test performance: ~82% accuracy, ~0.92 ROC-AUC
-            - Many inputs require specialized medical tests
-            """
-        )
-
-# Footer
 st.markdown("---")
-st.caption(
-    "Educational project • Framingham equations (2008) + Random Forest on UCI data • "
-    "Not for clinical use • Always consult a licensed physician"
-)
+st.caption("Educational project • Framingham 2008 + Random Forest on UCI data • Not for clinical use")
