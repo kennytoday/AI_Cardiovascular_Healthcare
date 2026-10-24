@@ -1,4 +1,5 @@
 # ❤️ AI Cardio Health Risk Checker
+![Project Result](<Screenshot (35)-1.png>) ![Project GUI](<Screenshot (33)-1.png>) ![REsult](<Screenshot (34)-1.png>)
 
 A complete educational Python project that combines:
 
@@ -105,4 +106,3 @@ Ideas:
 - Built with: scikit-learn, Streamlit, Plotly, pandas
 
 Use and modify freely for learning and personal experimentation.
-.

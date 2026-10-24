@@ -16,7 +16,6 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import train_test_split
 
-# Paths
 ROOT = Path(__file__).resolve().parent.parent
 DATA_PATH = ROOT / "data" / "heart.csv"
 MODEL_PATH = ROOT / "models" / "heart_disease_model.pkl"
@@ -48,7 +47,6 @@ def train():
     )
     model.fit(X_train, y_train)
 
-    # Evaluation
     y_pred = model.predict(X_test)
     y_prob = model.predict_proba(X_test)[:, 1]
 
@@ -60,7 +58,6 @@ def train():
     print("\nClassification Report:")
     print(classification_report(y_test, y_pred, target_names=["No Disease", "Disease"]))
 
-    # Feature importance
     importances = sorted(
         zip(X.columns, model.feature_importances_),
         key=lambda x: x[1],
@@ -70,7 +67,6 @@ def train():
     for feat, imp in importances:
         print(f"  {feat:12s}: {imp:.4f}")
 
-    # Save
     MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(model, MODEL_PATH)
     with open(FEATURES_PATH, "w") as f:
